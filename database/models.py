@@ -9,7 +9,8 @@ class User(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     name: str = Field(max_length=100)
-    cpf: str = Field(max_length=11)
+    cpf: str = Field(max_length=14)
+    phone: str = Field(max_length=14)
     email: str = Field(max_length=50)
     password: str
     user_role: str = Field(max_length=100, default="Comum")
@@ -48,7 +49,7 @@ class Restaurant(SQLModel, table=True):
     user: Optional[User] = Relationship(back_populates="restaurants")
     name: str = Field(max_length=200)
     address: str = Field(max_length=300)
-    phone: str = Field(max_length=11)
+    phone: str = Field(max_length=14)
     category: str = Field(max_length=100)
     created_at: datetime = Field(default_factory=datetime.now)
 

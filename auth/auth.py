@@ -2,15 +2,16 @@ import re
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import Session, select
+from sqlmodel import Session, select, or_
 from starlette import status
 from database.db import get_db
-from database.models import Usuario, RecuperaSenha
+from database.models import User, PasswordRecovery
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timedelta, timezone
 from setup.settings import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_TIME, REFRESH_TOKEN_EXPIRE_TIME, APP_URL, email_conf
 from pydantic import BaseModel, EmailStr
+from validate_docbr import CPF, CNPJ
 from auth.m2f import *
 
 router = APIRouter(
@@ -22,7 +23,9 @@ bcrypt_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
 oauth2_bearer = OAuth2PasswordBearer(tokenUrl='auth/login')
 
 class CreateUserRequest(BaseModel):
-    nome: str
+    name: str
+    cpf: str
+    phone: str
     email: EmailStr
     password: str
 
@@ -35,20 +38,26 @@ async def create_user(db: db_dependency,
         raise HTTPException(status_code=400, detail="O campo de nome deve ser preenchido")
     if create_user_request.password == '':
         raise HTTPException(status_code=400, detail="O campo de senha deve ser preenchido")
+    if not CPF().validate(create_user_request.cpf):
+        raise HTTPException(status_code=400, detail="CPF inválido!")
+    if not re.match('^\(?\d{2}\)?[\s-]?\d{4,5}-?\d{4}$', create_user_request.phone):
+        raise HTTPException(status_code=400, detail="Número de celular inválido!")
     else:
         try:
             secret_encoded, qrcode = gera_m2f(create_user_request.email)
-            create_user_model = Usuario(
-                nome=create_user_request.nome,
+            create_user_model = User(
+                name=create_user_request.name,
+                cpf=create_user_request.cpf,
+                phone=create_user_request.phone,
                 email=create_user_request.email,
-                senha=bcrypt_context.hash(create_user_request.password),
+                password=bcrypt_context.hash(create_user_request.password),
                 secret_key=secret_encoded,
                 qrcode=qrcode
             )
-            query = select(Usuario).where(Usuario.email == create_user_model.email)
+            query = select(User).where(or_(User.email == create_user_model.email, User.cpf == create_user_model.cpf))
             consulta = db.exec(query).first()
             if consulta:
-                raise HTTPException(status_code=409, detail="Email já existente")
+                raise HTTPException(status_code=409, detail="Email ou CPF já existente")
             else:
                 db.add(create_user_model)
                 db.commit()
@@ -64,16 +73,16 @@ async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm,
         if user == False:
             raise HTTPException(status_code=400, detail=f"Usuário não registrado")
         else:
-            if user.primeiro_login == True:
+            if user.first_login == True:
                 return {"id":user.id}
-            return {"id":user.id,"primeiro_login":user.primeiro_login}
+            return {"id":user.id,"primeiro_login":user.first_login}
     except Exception as e:
         raise HTTPException(status_code=e.status_code, detail=f"Erro ao realizar login: {e}")
 
 @router.get("/qr/{id}")
 async def qrcode(id: int, db: db_dependency):
     try:
-        statement = select(Usuario).where(Usuario.id == id)
+        statement = select(User).where(User.id == id)
         query = db.exec(statement).first()
         return {"qrcode": query.qrcode, "id":f"{id}"}
     except Exception as e:
@@ -82,11 +91,11 @@ async def qrcode(id: int, db: db_dependency):
 @router.post("/m2f/{id}")
 async def m2f_verification(id: int, otp: str, db: db_dependency):
     try:
-        statement = select(Usuario).where(Usuario.id == id)
+        statement = select(User).where(User.id == id)
         query = db.exec(statement).first()
         verify = verifica_m2f(query.secret_key, otp)
         if verify == True:
-            query.primeiro_login = False
+            query.first_login = False
             query.qrcode = ''
             tokens = create_access_token(query.email, query.id, db)
             query.refresh_token = tokens[1]["refresh_token"]
@@ -101,7 +110,7 @@ async def m2f_verification(id: int, otp: str, db: db_dependency):
 @router.get("/m2f/recovery/{id}")
 async def m2f_recovery(id: int, db: db_dependency):
     try:
-       statement = select(Usuario).where(Usuario.id == id)
+       statement = select(User).where(User.id == id)
        query = db.exec(statement).first()
        return await recupera_m2f(query.email, db)
     except Exception as e:
@@ -109,7 +118,7 @@ async def m2f_recovery(id: int, db: db_dependency):
 
 def authenticate_user(email: str, password: str, db):
     try:
-        user = select(Usuario).where(Usuario.email == email)
+        user = select(User).where(User.email == email)
         query = db.exec(user).first()
         if not query or not bcrypt_context.verify(password, query.senha):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
@@ -128,7 +137,7 @@ def create_access_token(email: str, user_id: int, db: db_dependency):
         refresh_encode.update({"exp": refresh_expires})
         access_jwt = jwt.encode(access_encode, SECRET_KEY, algorithm=ALGORITHM)
         refresh_jwt = jwt.encode(refresh_encode, SECRET_KEY, algorithm=ALGORITHM)
-        user = select(Usuario).where(Usuario.id == user_id)
+        user = select(User).where(User.id == user_id)
         query = db.exec(user).first()
         query.refresh_token = refresh_jwt
         db.commit()
@@ -155,7 +164,7 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]):
 async def refresh_token(refresh_token: Annotated[str, Depends(oauth2_bearer)], db: db_dependency):
     refresh = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
     id = refresh.get("id")
-    user = select(Usuario).where(Usuario.id == id)
+    user = select(User).where(User.id == id)
     query = db.exec(user).first()
     exp_timestamp = refresh.get("exp")
     if exp_timestamp:
@@ -174,14 +183,14 @@ async def refresh_token(refresh_token: Annotated[str, Depends(oauth2_bearer)], d
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, 
                                 detail=f"Ocorreu um erro ao verificar o token: {e} token: {refresh_token}")
 
-@router.post("/recuperasenha")
+@router.post("/password-recovery")
 async def token_recupera_senha(email: EmailStr, db: db_dependency):
     try:
-        user = select(Usuario).where(Usuario.email == email)
+        user = select(User).where(User.email == email)
         query = db.exec(user).first()
         token = re.sub(r'[./\\]','',bcrypt_context.hash(email))
-        cria_token = RecuperaSenha(
-            usuario_id = query.id,
+        cria_token = PasswordRecovery(
+            user_id = query.id,
             token = token
         )
         db.add(cria_token)
@@ -203,15 +212,15 @@ async def token_recupera_senha(email: EmailStr, db: db_dependency):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,detail=f"Erro ao gerar email de recuperação: {e}")
     
-@router.post("/recuperasenha/{token}")
+@router.post("/password-recovery/{token}")
 async def recupera_senha(token: str, nova_senha: str, db: db_dependency):
     try:
-        query = select(RecuperaSenha).where(RecuperaSenha.token == token)
+        query = select(PasswordRecovery).where(PasswordRecovery.token == token)
         result = db.exec(query).first()
         if not result:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token Inválido")
         else:
-            user = select(Usuario).where(Usuario.id == result.usuario_id)
+            user = select(User).where(User.id == result.User_id)
             query = db.exec(user).first()
             query.senha = bcrypt_context.hash(nova_senha)
             db.delete(result)
