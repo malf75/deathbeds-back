@@ -24,6 +24,7 @@ class Usuario(SQLModel, table=True):
     primeiro_login: bool = Field(default=True)
     refresh_token: Optional[str] = None
     session_key: Optional[str] = None
+    deletado_em: Optional[datetime] = None
 
 
 class RecuperaSenha(SQLModel, table=True):

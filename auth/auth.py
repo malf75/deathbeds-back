@@ -27,6 +27,9 @@ class CreateUserRequest(BaseModel):
     email: EmailStr
     password: str
 
+class TokenRequest(BaseModel):
+    token: str
+
 db_dependency = Annotated[Session, Depends(get_db)]
 
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
@@ -163,14 +166,14 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]):
                             detail=f"Erro ao verificar o usuário:{e}")
 
 @router.post("/token/refresh")
-async def refresh_token(refresh_token: str, db: db_dependency):
+async def refresh_token(token_request: TokenRequest, db: db_dependency):
     try:
-        refresh = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        refresh = jwt.decode(token_request.token, SECRET_KEY, algorithms=[ALGORITHM])
         id = refresh.get("id")
         user = select(Usuario).where(Usuario.id == id)
         query = db.exec(user).first()
         exp_timestamp = refresh.get("exp")
-        if query.refresh_token == refresh_token:
+        if query.refresh_token == token_request.token:
             exp_datetime = datetime.fromtimestamp(exp_timestamp, timezone.utc)
             if datetime.now(timezone.utc) > exp_datetime:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
@@ -178,6 +181,7 @@ async def refresh_token(refresh_token: str, db: db_dependency):
             else:
                 token = create_access_token(query.email, query.id, db)
                 db.commit()
+                print(token)
                 return token
     except Exception as e:
         db.rollback()
