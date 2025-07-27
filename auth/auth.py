@@ -152,7 +152,7 @@ def create_access_token(email: str, user_id: int, db: db_dependency):
                     detail=f"Erro ao gerar token o usuário:{e}")
     
 @router.get("/user")
-async def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]):
+async def get_current_user(token: Annotated[str, Depends(oauth2_bearer)], db: db_dependency):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
@@ -160,7 +160,9 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]):
         if email is None or user_id is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                                 detail="Não pode verificar o usuário.")
-        return {"email": email, "id": user_id}
+        query = select(Usuario).where(Usuario.id == user_id)
+        user = db.exec(query).first()
+        return {"email": email, "id": user_id, "nome": user.nome}
     except JWTError as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail=f"Erro ao verificar o usuário:{e}")
