@@ -2,10 +2,11 @@ import re
 import secrets
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import Session, select
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, File
+from fastapi.responses import JSONResponse
+from sqlmodel import select
 from starlette import status
-from database.db import get_db
+from database.db import db_dependency
 from database.models import Usuario, RecuperaSenha
 from passlib.context import CryptContext
 from jose import jwt, JWTError
@@ -13,6 +14,9 @@ from datetime import datetime, timedelta, timezone
 from setup.settings import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_TIME, REFRESH_TOKEN_EXPIRE_TIME, APP_URL, email_conf
 from pydantic import BaseModel, EmailStr
 from auth.m2f import *
+from email_validator import validate_email
+from password_validator import PasswordValidator
+from typing import Optional
 
 router = APIRouter(
     prefix='/auth',
@@ -22,62 +26,98 @@ router = APIRouter(
 bcrypt_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
 oauth2_bearer = OAuth2PasswordBearer(tokenUrl='auth/login')
 
-class CreateUserRequest(BaseModel):
-    nome: str
-    email: EmailStr
-    password: str
-
 class TokenRequest(BaseModel):
     token: str
 
-db_dependency = Annotated[Session, Depends(get_db)]
+schema = PasswordValidator()
+schema.min(8).max(100).has().uppercase().has().lowercase().has().digits().has().symbols().has().no().spaces()
 
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
 async def create_user(db: db_dependency,
-                      create_user_request: CreateUserRequest):
-    if create_user_request.nome == '':
-        raise HTTPException(status_code=400, detail="O campo de nome deve ser preenchido")
-    if create_user_request.password == '':
-        raise HTTPException(status_code=400, detail="O campo de senha deve ser preenchido")
-    else:
-        try:
-            secret_encoded, qrcode = gera_m2f(create_user_request.email)
+                    nome: str = Form(...),
+                    email: EmailStr = Form(...),
+                    cpf: str = Form(...),
+                    crm_crp: Optional[str] = Form(None),
+                    password: str = Form(...),
+                    tipo_usuario: int = Form(...),
+                    foto: Optional[UploadFile] = File(None),
+                    uf: str = Form(...),
+                    tipo: str = Form(...)
+                    ):
+    try:
+        emailinfo = validate_email(email, check_deliverability=True)
+        emailnormalized = emailinfo.normalized
+        if nome == '':
+            raise Exception("O campo de nome deve ser preenchido")
+        if password == '':
+            raise Exception("O campo de senha deve ser preenchido")
+        if not schema.validate(password):
+            raise Exception("Esta senha não é válida")
+        if not emailnormalized:
+            raise Exception("Este email não é válido")
+        secret_encoded, qrcode = gera_m2f(email)
+        if tipo_usuario == 1:
             create_user_model = Usuario(
-                nome=create_user_request.nome,
-                email=create_user_request.email,
-                senha=bcrypt_context.hash(create_user_request.password),
+                nome=nome,
+                email=email,
+                uf=uf,
+                cpf=cpf,
+                senha=bcrypt_context.hash(password),
                 secret_key=secret_encoded,
                 qrcode=qrcode
             )
-            query = select(Usuario).where(Usuario.email == create_user_model.email)
-            consulta = db.exec(query).first()
-            if consulta:
-                raise HTTPException(status_code=409, detail="Email já existente")
-            else:
-                db.add(create_user_model)
-                db.commit()
-                return {"201": "Usuário Criado"}
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao criar usuário: {e}")
+        if tipo_usuario == 2:
+            if tipo == "CRP":
+                create_user_model = Usuario(
+                    nome=nome,
+                    email=email,
+                    uf=uf,
+                    cpf=cpf,
+                    crp=crm_crp,
+                    senha=bcrypt_context.hash(password),
+                    secret_key=secret_encoded,
+                    qrcode=qrcode
+                )
+            if tipo == "CRM":
+                create_user_model = Usuario(
+                    nome=nome,
+                    email=email,
+                    uf=uf,
+                    cpf=cpf,
+                    crm=crm_crp,
+                    senha=bcrypt_context.hash(password),
+                    secret_key=secret_encoded,
+                    qrcode=qrcode
+                )
+        query = select(Usuario).where(Usuario.email == create_user_model.email)
+        consulta = db.exec(query).first()
+        if consulta:
+            raise Exception("Email já existente")
+        else:
+            db.add(create_user_model)
+            db.commit()
+            return JSONResponse(status_code=status.HTTP_201_CREATED, content="Usuário criado com sucesso")
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{e}")
 
 @router.post("/login")
 async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
                                  db: db_dependency):
     try:
-        user = authenticate_user(form_data.username, form_data.password, db)
-        if user == False:
-            raise HTTPException(status_code=400, detail=f"Usuário não registrado")
-        else:
-            if user.primeiro_login == True:
-                key = secrets.token_hex(16)
-                query = select(Usuario).where(Usuario.email == form_data.username)
-                usuario = db.exec(query).first()
-                usuario.session_key = key
-                db.commit()
-                return {"id":user.id, "key": key}
-            return {"id":user.id,"primeiro_login":user.primeiro_login}
+        try:
+            user = authenticate_user(form_data.username, form_data.password, db)
+        except Exception as e:
+            raise Exception(e)
+        if user.primeiro_login == True:
+            key = secrets.token_hex(16)
+            query = select(Usuario).where(Usuario.email == form_data.username)
+            usuario = db.exec(query).first()
+            usuario.session_key = key
+            db.commit()
+            return JSONResponse(status_code=status.HTTP_200_OK, content={"id":user.id, "key": key})
+        return JSONResponse(status_code=status.HTTP_200_OK, content={"id":user.id,"primeiro_login":user.primeiro_login})
     except Exception as e:
-        raise HTTPException(status_code=e.status_code, detail=f"Erro ao realizar login: {e}")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Erro ao realizar login: {e}")
 
 @router.get("/qr/{id}/{key}")
 async def qrcode(id: int, key: str, db: db_dependency):
@@ -87,30 +127,27 @@ async def qrcode(id: int, key: str, db: db_dependency):
         if query.session_key == key:
             query.session_key = None
             db.commit()
-            return {"qrcode": query.qrcode, "id":f"{id}"}
+            return JSONResponse(status_code=status.HTTP_200_OK, content={"qrcode": query.qrcode, "id":f"{id}"})
         else:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Erro a retornar qrcode")
+            raise Exception("Erro a retornar qrcode")
     except Exception as e:
-        return {"message":f"Erro ao requisitar qrcode: {e}"}
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao requisitar qrcode: {e}")
 
 @router.post("/m2f/{id}")
 async def m2f_verification(id: int, otp: str, db: db_dependency):
-    try:
-        statement = select(Usuario).where(Usuario.id == id)
-        query = db.exec(statement).first()
-        verify = verifica_m2f(query.secret_key, otp)
-        if verify == True:
-            query.primeiro_login = False
-            query.qrcode = ''
-            tokens = create_access_token(query.email, query.id, db)
-            db.commit()
-            return {"tokens": tokens}
-        else:
-            db.rollback()
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                                detail="OTP inválido")
-    except Exception as e:
-        return {"message":f"Erro ao verificar OTP: {e}"}
+    statement = select(Usuario).where(Usuario.id == id)
+    query = db.exec(statement).first()
+    verify = verifica_m2f(query.secret_key, otp)
+    if verify == True:
+        query.primeiro_login = False
+        query.qrcode = ''
+        tokens = create_access_token(query.email, query.id, db)
+        db.commit()
+        return JSONResponse(status_code=status.HTTP_200_OK, content={"tokens": tokens})
+    else:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="OTP inválido")
     
 @router.get("/m2f/recovery/{id}")
 async def m2f_recovery(id: int, db: db_dependency):
@@ -119,18 +156,19 @@ async def m2f_recovery(id: int, db: db_dependency):
        query = db.exec(statement).first()
        return await recupera_m2f(query.email, db)
     except Exception as e:
-        return {"message":f"Erro ao recuperar m2f: {e}"}
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao recuperar m2f: {e}")
 
 def authenticate_user(email: str, password: str, db):
     try:
         user = select(Usuario).where(Usuario.email == email)
         query = db.exec(user).first()
-        if not query or not bcrypt_context.verify(password, query.senha):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                                detail="Credenciais Incorretas")
+        if not query:
+            raise Exception("Usuário não registrado")
+        if not bcrypt_context.verify(password, query.senha):
+            raise Exception("Senha incorreta")
         return query
     except Exception as e:
-        return False
+        raise e
 
 def create_access_token(email: str, user_id: int, db: db_dependency):
     try:
@@ -183,8 +221,10 @@ async def refresh_token(token_request: TokenRequest, db: db_dependency):
             else:
                 token = create_access_token(query.email, query.id, db)
                 db.commit()
-                print(token)
                 return token
+        else:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                                    detail="Refresh token inválido, refaça o login.")
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
