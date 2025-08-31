@@ -25,6 +25,7 @@ class Usuario(SQLModel, table=True):
     criado_em: datetime = Field(default_factory=datetime.now)
     deletado_em: Optional[datetime] = None
 
+    perfil: List["PerfilUsuario"] = Relationship(back_populates="usuario", cascade_delete=True)
     recupera_senha: List["RecuperaSenha"] = Relationship(back_populates="usuario", cascade_delete=True)
     postagens: List["Postagem"] = Relationship(back_populates="usuario", cascade_delete=True)
     chats_padrao: List["ChatsPadrao"] = Relationship(back_populates="usuario")
@@ -48,6 +49,19 @@ class Usuario(SQLModel, table=True):
     seguidores: List["Seguidores"] = Relationship(back_populates="usuario_seguido", sa_relationship_kwargs={"foreign_keys": "[Seguidores.usuario_seguido_id]", "cascade": "all, delete-orphan"})
     notificacoes: Optional["Notificacoes"] = Relationship(back_populates="usuario")
 
+class PerfilUsuario(SQLModel, table=True):
+    __tablename__ = 'perfil_usuario'
+
+    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    usuario_id: int = Field(foreign_key="usuarios.id", ondelete="CASCADE")
+    usuario: Optional[Usuario] = Relationship(back_populates="perfil")
+    bio: Optional[str] = Field(max_length=255)
+    foto: Optional[str] = None
+    profissao: Optional[str] = Field(max_length=100)
+    especializacao: Optional[str] = Field(max_length=100)
+    cor: Optional[str] = Field(default="aliceblue")
+    privado: bool = Field(default=False)
+    deletado_em: Optional[datetime] = None
 
 class TipoUsuario(SQLModel, table=True):
     __tablename__ = 'tipo_usuario'

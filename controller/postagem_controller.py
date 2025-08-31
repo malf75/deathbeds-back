@@ -24,13 +24,14 @@ class PostagemController:
   
   async def lista(quantidade, db: db_dependency):
     try:
-      query = select(Postagem, Usuario.nome).join(Usuario, Postagem.usuario_id == Usuario.id).offset(0).limit(quantidade).order_by(Postagem.criado_em.desc())
+      query = select(Postagem, Usuario.nome, Usuario.tipo_usuario_id).join(Usuario, Postagem.usuario_id == Usuario.id).offset(0).limit(quantidade).order_by(Postagem.criado_em.desc())
       response = db.exec(query).all()
       postagens = []  
       for x in response:
         postagens.append({
           "id": x.Postagem.id,
           "usuario": x[1],
+          "tipo_usuario_id": x[2],
           "corpo": x.Postagem.corpo,
           "criado_em": x.Postagem.criado_em.strftime("%d/%m/%Y, %H:%M:%S")
         })

@@ -6,10 +6,10 @@ from sqlalchemy.orm import aliased
 from sqlalchemy import or_, func
 from starlette import status
 from pydantic import BaseModel
-from database.models import Usuario, ChatsPadrao, UsuariosChatPadrao, MensagensChatPadrao
+from database.models import Usuario, ChatsPadrao, ChatsAtendimento, MensagensChatAtendimento, UsuariosChatPadrao, MensagensChatPadrao
 
 class ChatController:
-    async def novo(usuario_id, destinatarios_id, nome, db: db_dependency):
+    async def novo_padrao(usuario_id, destinatarios_id, nome, db: db_dependency):
         try:
             igualdade = False
             primeiro_chat = True
@@ -53,7 +53,7 @@ class ChatController:
             print(e)    
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao criar chat: {e}")
     
-    async def lista(usuario_id, quantidade, db: db_dependency):
+    async def lista_padrao(usuario_id, quantidade, db: db_dependency):
         try:
             UsuarioCriador = aliased(Usuario)
             UsuarioParticipante = aliased(Usuario)
@@ -95,7 +95,79 @@ class ChatController:
             print(e)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao listar chats: {e}")
         
-    async def retorna_chat(usuario_id, chat_id, quantidade, db: db_dependency):
+    async def lista_atendimento(usuario_id, quantidade, db: db_dependency):
+        try:
+            Profissional = aliased(Usuario)
+            Paciente = aliased(Usuario)
+            Discente = aliased(Usuario)
+
+            query = (
+                select(
+                    ChatsAtendimento,
+                    Profissional.id.label("profissional_id"),
+                    Profissional.nome.label("profissional_nome"),
+                    Paciente.id.label("paciente_id"),
+                    Paciente.nome.label("paciente_nome"),
+                    Discente.id.label("discente_id"),
+                    Discente.nome.label("discente_nome"),
+                )
+                .join(Profissional, ChatsAtendimento.profissional_id == Profissional.id)
+                .join(Paciente, ChatsAtendimento.paciente_id == Paciente.id)
+                .outerjoin(Discente, ChatsAtendimento.discente_id == Discente.id)
+                .where(
+                    or_(
+                        ChatsAtendimento.profissional_id == usuario_id,
+                        ChatsAtendimento.paciente_id == usuario_id,
+                        ChatsAtendimento.discente_id == usuario_id,
+                    )
+                )
+                .offset(0)
+                .limit(quantidade)
+            )
+
+            chats = db.exec(query).all()
+            lista_chat = {}
+
+            for chat in chats:
+                atendimento = chat.ChatsAtendimento
+                chat_id = atendimento.id
+                print(chat)
+
+                if chat_id not in lista_chat:
+                    lista_chat[chat_id] = {
+                        "id": chat_id,
+                        "criador_id": chat.profissional_id,
+                        "criador": chat.profissional_nome,
+                        "participantes": [],
+                        "horario_inicio": atendimento.horario_inicio.strftime("%d/%m/%Y, %H:%M:%S"),
+                        "horario_final": atendimento.horario_final.strftime("%d/%m/%Y, %H:%M:%S"),
+                        "criado_em": atendimento.criado_em.strftime("%d/%m/%Y, %H:%M:%S"),
+                    }
+
+                participantes = [
+                    {"id": chat.paciente_id, "nome": chat.paciente_nome},
+                    {"id": chat.discente_id, "nome": chat.discente_nome} if chat.discente_id else None,
+                ]
+
+                for participante in participantes:
+                    if participante and participante["id"] and not any(
+                        p["id"] == participante["id"] for p in lista_chat[chat_id]["participantes"]
+                    ):
+                        lista_chat[chat_id]["participantes"].append(participante)
+
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=list(lista_chat.values()),
+            )
+
+        except Exception as e:
+            print(e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Erro ao listar chats: {e}",
+            )
+        
+    async def retorna_chat_padrao(usuario_id, chat_id, quantidade, db: db_dependency):
         try:
             UsuarioCriador = aliased(Usuario)
             UsuarioParticipante = aliased(Usuario)
@@ -185,21 +257,138 @@ class ChatController:
                 detail="Erro ao listar chats",
             )
         
-    async def cria_mensagem(usuario_id, chat_id, corpo, db: db_dependency):
+    async def retorna_chat_atendimento(usuario_id, chat_id, quantidade, db: db_dependency):
         try:
-            query = select(ChatsPadrao).where(ChatsPadrao.id == chat_id).where(ChatsPadrao.criador_id == usuario_id)
-            chat = db.exec(query).first()
-            query = select(UsuariosChatPadrao).where(UsuariosChatPadrao.chat_id == chat_id).where(UsuariosChatPadrao.usuario_id == usuario_id)
-            participante = db.exec(query).first()
-            if chat or participante:
-                mensagem = MensagensChatPadrao(
-                    corpo=corpo,
-                    usuario_id=usuario_id,
-                    chat_id=chat_id
+            Profissional = aliased(Usuario)
+            Paciente = aliased(Usuario)
+            Discente = aliased(Usuario)
+
+            query_chat = (
+                select(
+                    ChatsAtendimento,
+                    Profissional.id.label("profissional_id"),
+                    Profissional.nome.label("profissional_nome"),
+                    Paciente.id.label("paciente_id"),
+                    Paciente.nome.label("paciente_nome"),
+                    Discente.id.label("discente_id"),
+                    Discente.nome.label("discente_nome"),
                 )
-                db.add(mensagem)
-                db.commit()
-                return mensagem
+                .join(Profissional, ChatsAtendimento.profissional_id == Profissional.id)
+                .join(Paciente, ChatsAtendimento.paciente_id == Paciente.id)
+                .outerjoin(Discente, ChatsAtendimento.discente_id == Discente.id)
+                .where(
+                    or_(
+                        ChatsAtendimento.profissional_id == usuario_id,
+                        ChatsAtendimento.paciente_id == usuario_id,
+                        ChatsAtendimento.discente_id == usuario_id,
+                    )
+                )
+                .where(ChatsAtendimento.id == chat_id)
+            )
+
+            chats = db.exec(query_chat).all()
+            if not chats:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Chat não encontrado ou usuário não tem acesso.",
+                )
+
+            chat = chats[0]
+            atendimento = chat.ChatsAtendimento
+            lista_chat = {
+                "id": atendimento.id,
+                "criador_id": chat.profissional_id,
+                "criador": chat.profissional_nome,
+                "participantes": [],
+                "mensagens": [],
+                "horario_inicio": atendimento.horario_inicio.strftime("%d/%m/%Y, %H:%M:%S"),
+                "horario_final": atendimento.horario_final.strftime("%d/%m/%Y, %H:%M:%S"),
+                "criado_em": atendimento.criado_em.strftime("%d/%m/%Y, %H:%M:%S"),
+            }
+
+            participantes = [
+                {"id": chat.paciente_id, "nome": chat.paciente_nome},
+                {"id": chat.discente_id, "nome": chat.discente_nome} if chat.discente_id else None,
+            ]
+
+            for participante in participantes:
+                if participante and participante["id"] and not any(
+                    p["id"] == participante["id"] for p in lista_chat["participantes"]
+                ):
+                    lista_chat["participantes"].append(participante)
+
+            total_mensagens = db.exec(
+                select(func.count(MensagensChatAtendimento.id)).where(MensagensChatAtendimento.chat_id == chat_id)
+            ).one()
+
+            offset = max(total_mensagens - quantidade, 0)
+
+            query_msgs = (
+                select(MensagensChatAtendimento)
+                .where(MensagensChatAtendimento.chat_id == chat_id)
+                .order_by(MensagensChatAtendimento.criado_em.asc())
+                .limit(quantidade)
+                .offset(offset)
+            )
+
+            mensagens = db.exec(query_msgs).all()
+
+            lista_chat["mensagens"] = [
+                {
+                    "id": msg.id,
+                    "corpo": msg.corpo,
+                    "chat_id": msg.chat_id,
+                    "usuario_id": msg.usuario_id,
+                    "criado_em": msg.criado_em.strftime("%d/%m/%Y, %H:%M:%S"),
+                }
+                for msg in mensagens
+            ]
+
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=lista_chat,
+            )
+
+        except Exception as e:
+            print(e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Erro ao listar chats",
+            )
+        
+    async def cria_mensagem(usuario_id, chat_id, corpo, tipo_chat, db: db_dependency):
+        try:
+            print(tipo_chat)
+            if tipo_chat == 'padrao':
+                query = select(ChatsPadrao).where(ChatsPadrao.id == chat_id, ChatsPadrao.criador_id == usuario_id)
+                chat = db.exec(query).first()
+                query = select(UsuariosChatPadrao).where(UsuariosChatPadrao.chat_id == chat_id).where(UsuariosChatPadrao.usuario_id == usuario_id)
+                participante = db.exec(query).first()
+                if chat or participante:
+                    mensagem = MensagensChatPadrao(
+                        corpo=corpo,
+                        usuario_id=usuario_id,
+                        chat_id=chat_id
+                    )
+                    db.add(mensagem)
+                    db.commit()
+                    return mensagem
+            if tipo_chat == 'atendimento':
+                query = select(ChatsAtendimento).where(ChatsAtendimento.id == chat_id).where(or_(
+                    ChatsAtendimento.profissional_id == usuario_id,
+                    ChatsAtendimento.paciente_id == usuario_id,
+                    ChatsAtendimento.discente_id == usuario_id
+                ))
+                chat = db.exec(query).first()
+                if chat:
+                    mensagem = MensagensChatAtendimento(
+                        corpo=corpo,
+                        usuario_id=usuario_id,
+                        chat_id=chat_id
+                    )
+                    db.add(mensagem)
+                    db.commit()
+                    return mensagem
         except Exception as e:
             print(e)
             raise HTTPException(
@@ -207,16 +396,25 @@ class ChatController:
                 detail="Erro ao criar mensagem"
             )
 
-    async def retorna_usuarios_participantes(chat_id, db: db_dependency):
+    async def retorna_usuarios_participantes(chat_id, tipo_chat, db: db_dependency):
         try:
-            query = select(UsuariosChatPadrao.usuario_id).where(UsuariosChatPadrao.chat_id == chat_id)
-            participantes = db.exec(query).all()
-            query = select(ChatsPadrao.criador_id).where(ChatsPadrao.id == chat_id)
-            criador = db.exec(query).first()
+            if tipo_chat == 'padrao':
+                query = select(UsuariosChatPadrao.usuario_id).where(UsuariosChatPadrao.chat_id == chat_id)
+                participantes = db.exec(query).all()
+                query = select(ChatsPadrao.criador_id).where(ChatsPadrao.id == chat_id)
+                criador = db.exec(query).first()
+            else:
+                query = select(ChatsAtendimento.discente_id, ChatsAtendimento.paciente_id, ChatsAtendimento.profissional_id).where(ChatsAtendimento.id == chat_id)
+                participantes = db.exec(query).all()
             lista_participantes = []
-            lista_participantes.append(criador)
-            for p in participantes:
-                lista_participantes.append(p)
+            if tipo_chat == 'padrao':
+                lista_participantes.append(criador)
+                for p in participantes:
+                        lista_participantes.append(p)
+            else:
+                for p in participantes[0]:
+                    if p != None:
+                        lista_participantes.append(p)
             return lista_participantes
         except Exception as e:
             print(e)

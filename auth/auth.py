@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from sqlmodel import select
 from starlette import status
 from database.db import db_dependency
-from database.models import Usuario, RecuperaSenha
+from database.models import Usuario, RecuperaSenha, TipoUsuario, PerfilUsuario
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timedelta, timezone
@@ -76,7 +76,8 @@ async def create_user(db: db_dependency,
                     crp=crm_crp,
                     senha=bcrypt_context.hash(password),
                     secret_key=secret_encoded,
-                    qrcode=qrcode
+                    qrcode=qrcode,
+                    tipo_usuario_id=2,
                 )
             if tipo == "CRM":
                 create_user_model = Usuario(
@@ -87,7 +88,8 @@ async def create_user(db: db_dependency,
                     crm=crm_crp,
                     senha=bcrypt_context.hash(password),
                     secret_key=secret_encoded,
-                    qrcode=qrcode
+                    qrcode=qrcode,
+                    tipo_usuario_id=2,
                 )
         query = select(Usuario).where(Usuario.email == create_user_model.email)
         consulta = db.exec(query).first()
@@ -95,6 +97,14 @@ async def create_user(db: db_dependency,
             raise Exception("Email já existente")
         else:
             db.add(create_user_model)
+            db.flush()
+            perfil = PerfilUsuario(
+                usuario_id=create_user_model.id,
+                bio=None,
+                profissao=None,
+                especializacao=None,
+            )
+            db.add(perfil)
             db.commit()
             return JSONResponse(status_code=status.HTTP_201_CREATED, content="Usuário criado com sucesso")
     except Exception as e:
@@ -198,9 +208,9 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_bearer)], db: db
         if email is None or user_id is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                                 detail="Não pode verificar o usuário.")
-        query = select(Usuario).where(Usuario.id == user_id)
+        query = select(Usuario, TipoUsuario.descricao).where(Usuario.id == user_id).join(TipoUsuario, TipoUsuario.id == Usuario.tipo_usuario_id)
         user = db.exec(query).first()
-        return {"email": email, "id": user_id, "nome": user.nome}
+        return {"email": email, "id": user_id, "nome": user.Usuario.nome, "tipo": user[1]}
     except JWTError as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail=f"Erro ao verificar o usuário:{e}")

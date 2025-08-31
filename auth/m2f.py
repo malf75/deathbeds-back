@@ -19,7 +19,7 @@ def gera_m2f(email):
         secret = pyotp.random_base32()
         totp = pyotp.TOTP(secret)
 
-        issuer_name = "Jao Financas"
+        issuer_name = "Deathbeds"
         user_email = email
         uri = totp.provisioning_uri(user_email, issuer_name=issuer_name)
         qr = segno.make(uri)

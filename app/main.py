@@ -32,19 +32,29 @@ async def cria_postagem(request: CriaPostagemRequest, db: db_dependency):
     postagem = await PostagemController.novo(request.id, request.corpo, db)
     return postagem
 
-@app.get("/chat")
+@app.get("/chat-padrao")
 async def retorna_chat(usuario_id: int, chat_id: int, quantidade: int, db:db_dependency):
-    chat = await ChatController.retorna_chat(usuario_id, chat_id, quantidade, db)
+    chat = await ChatController.retorna_chat_padrao(usuario_id, chat_id, quantidade, db)
     return chat
 
-@app.get("/chats")
+@app.get("/chat-atendimento")
+async def retorna_chat(usuario_id: int, chat_id: int, quantidade: int, db:db_dependency):
+    chat = await ChatController.retorna_chat_atendimento(usuario_id, chat_id, quantidade, db)
+    return chat
+
+@app.get("/chats-padrao")
 async def retorna_chats(usuario_id: int, quantidade: int, db: db_dependency):
-    chats = await ChatController.lista(usuario_id, quantidade, db)
+    chats = await ChatController.lista_padrao(usuario_id, quantidade, db)
     return chats
 
-@app.post("/chats")
+@app.get("/chats-atendimento")
+async def retorna_chats(usuario_id: int, quantidade: int, db: db_dependency):
+    chats = await ChatController.lista_atendimento(usuario_id, quantidade, db)
+    return chats
+
+@app.post("/chat")
 async def cria_chat(request: CriaChatRequest, db: db_dependency):
-    chat = await ChatController.novo(request.usuario_id, request.destinatarios_id, request.nome, db)
+    chat = await ChatController.novo_padrao(request.usuario_id, request.destinatarios_id, request.nome, db)
     return chat
 
 @app.get("/seguindo")
@@ -61,13 +71,24 @@ async def websocket_endpoint(websocket: WebSocket, access_token: str, db: db_dep
             tipo = response.get("type")
             print(tipo)
             print(response)
+            if tipo == "call_request":
+                await manager.encaminha_oferta(access_token, response["destinatario_id"], db)
+            if tipo == "call_request_cancelled":
+                await manager.cancela_oferta(access_token, response["destinatario_id"], db)
+            if tipo == "call_request_rejected":
+                await manager.rejeita_oferta(access_token, response["destinatario_id"], db)
+            if tipo == "call_request_accepted":
+                await manager.aceita_oferta(access_token, response["destinatario_id"], db)
+            if tipo == "offer":
+                await manager.encaminha_oferta_p2p(access_token, response["to"], response["offer"], db)
+            if tipo == "answer":
+                await manager.responde_oferta_p2p(access_token, response["to"], response["answer"], db)
+            if tipo == "candidate":
+                await manager.envia_icecandidate(access_token, response["to"], response["candidate"], db)
             if tipo == "notificacao":
                 pass
-            if tipo == "oferta":
-                pass
             if tipo == "mensagem":
-                response = await manager.envia_mensagem(access_token, response["corpo"], response["id_chat"], db)
-                print(response)
+                await manager.envia_mensagem(access_token, response["corpo"], response["id_chat"], response["tipo_chat"], db)
     except WebSocketDisconnect:
         manager.desconecta(access_token, db)
 
