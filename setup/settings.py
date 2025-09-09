@@ -31,9 +31,6 @@ email_conf = ConnectionConfig(
 origins = [
     str(os.getenv('APP_URL')),
     str(os.getenv('DEV_URL')),
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://172.24.0.4:3000"
 ]
 
 app.add_middleware(
